@@ -2,6 +2,16 @@
 
 use ctru_sys::__errno;
 
+// Avoid conflicting a real POSIX errno by using a value < 0
+// Should we define this in ctru-sys somewhere or something?
+const ECTRU: libc::c_int = -1;
+
+/// Provides the libc `getrandom` API.
+///
+/// # Safety
+///
+/// `buflen` must be less than or equal to the size of the buffer pointed to by `buf`.
+///
 #[no_mangle]
 pub unsafe extern "C" fn getrandom(
     buf: *mut libc::c_void,
@@ -14,22 +24,18 @@ pub unsafe extern "C" fn getrandom(
     let maxlen = if flags & libc::GRND_RANDOM != 0 {
         512
     } else {
-        0x1FFFFFF
+        0x1FF_FFFF
     };
     buflen = buflen.min(maxlen);
-
-    // Avoid conflicting a real POSIX errno by using a value < 0
-    // Should we define this in ctru-sys somewhere or something?
-    const ECTRU: libc::c_int = -1;
 
     let ret = ctru_sys::psInit();
 
     // Error handling code for psInit
     if ctru_sys::R_FAILED(ret) {
         // Best-effort attempt at translating return codes
-        *__errno() = match ctru_sys::R_SUMMARY(ret) as libc::c_uint {
+        *__errno() = match ctru_sys::R_SUMMARY(ret).try_into() {
             // The service handle is full (would block to await availability)
-            ctru_sys::RS_WOULDBLOCK => libc::EAGAIN,
+            Ok(ctru_sys::RS_WOULDBLOCK) => libc::EAGAIN,
             // The caller doesn't have the right to call the service
             _ => ECTRU,
         };
@@ -44,12 +50,12 @@ pub unsafe extern "C" fn getrandom(
         buflen as libc::ssize_t
     } else {
         // Best-effort attempt at translating return codes
-        *__errno() = match ctru_sys::R_SUMMARY(ret) as libc::c_uint {
-            ctru_sys::RS_WOULDBLOCK => libc::EAGAIN,
-            ctru_sys::RS_INVALIDARG | ctru_sys::RS_WRONGARG => {
-                match ctru_sys::R_DESCRIPTION(ret) as libc::c_uint {
+        *__errno() = match ctru_sys::R_SUMMARY(ret).try_into() {
+            Ok(ctru_sys::RS_WOULDBLOCK) => libc::EAGAIN,
+            Ok(ctru_sys::RS_INVALIDARG | ctru_sys::RS_WRONGARG) => {
+                match ctru_sys::R_DESCRIPTION(ret).try_into() {
                     // The handle is incorrect (even though we just made it)
-                    ctru_sys::RD_INVALID_HANDLE => ECTRU,
+                    Ok(ctru_sys::RD_INVALID_HANDLE) => ECTRU,
                     _ => libc::EINVAL,
                 }
             }
